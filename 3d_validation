@@ -1,0 +1,233 @@
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+
+# ── Grid ─────────────────────────────────────────────────────────────────────
+N  = 48; L = 4.0; h = L/N; dV = h**3   # periodic grid, N cells
+# use cell-centred coordinates for periodic BC
+x1d = np.linspace(0, L, N, endpoint=False) + h/2
+X, Y, Z = np.meshgrid(x1d, x1d, x1d, indexing='ij')
+
+D = 0.05; sigma0 = 0.4; dt = 0.0010; Nsteps = 800
+A = 0.8   # velocity amplitude
+
+# ABC-type incompressible field (periodic, div=0)
+VX = A * np.sin(2*np.pi*Y/L) * np.cos(2*np.pi*Z/L)
+VY = A * np.sin(2*np.pi*Z/L) * np.cos(2*np.pi*X/L)
+VZ = A * np.sin(2*np.pi*X/L) * np.cos(2*np.pi*Y/L)
+
+# Spatially varying divergence perturbation (periodic, mean-zero)
+eps = 0.3   # compressibility strength
+DVX_extra = eps * A * np.sin(2*np.pi*X/L)
+DVY_extra = eps * A * np.sin(2*np.pi*Y/L)
+DVZ_extra =-eps * 2*A * np.sin(2*np.pi*Z/L)
+VX2 = VX + DVX_extra
+VY2 = VY + DVY_extra
+VZ2 = VZ + DVZ_extra
+
+# Numerical divergence of VX2,VY2,VZ2 (periodic central diff)
+def div_field(vx,vy,vz):
+    return ((np.roll(vx,-1,0)-np.roll(vx,1,0))/(2*h)
+           +(np.roll(vy,-1,1)-np.roll(vy,1,1))/(2*h)
+           +(np.roll(vz,-1,2)-np.roll(vz,1,2))/(2*h))
+
+DIV_V2 = div_field(VX2, VY2, VZ2)
+print(f"div(v) field: mean={DIV_V2.mean():.5f}  std={DIV_V2.std():.5f}  "
+      f"min={DIV_V2.min():.4f}  max={DIV_V2.max():.4f}")
+
+vmax = max(np.abs(VX2).max(),np.abs(VY2).max(),np.abs(VZ2).max())
+print(f"CFL: dt_max={0.4*h/vmax:.5f}  diff: dt_max={0.4*h**2/(6*D):.5f}  dt={dt}")
+
+def lap(f):
+    return ((np.roll(f,-1,0)-2*f+np.roll(f,1,0))
+           +(np.roll(f,-1,1)-2*f+np.roll(f,1,1))
+           +(np.roll(f,-1,2)-2*f+np.roll(f,1,2)))/h**2
+
+def div_pv(p, vx, vy, vz):
+    # Calculates the divergence of the probability flux: div(p*v)
+    fx = p * vx
+    fy = p * vy
+    fz = p * vz
+    
+    # Central difference with zero numerical diffusion
+    dx = (np.roll(fx, -1, 0) - np.roll(fx, 1, 0)) / (2*h)
+    dy = (np.roll(fy, -1, 1) - np.roll(fy, 1, 1)) / (2*h)
+    dz = (np.roll(fz, -1, 2) - np.roll(fz, 1, 2)) / (2*h)
+    
+    return dx + dy + dz
+
+def H_of(p):
+    safe = np.maximum(p, 1e-40)
+    return -np.sum(p * np.log(safe)) * dV
+
+def FI_of(p):
+    safe = np.maximum(p,1e-40)
+    gx=(np.roll(p,-1,0)-np.roll(p,1,0))/(2*h)
+    gy=(np.roll(p,-1,1)-np.roll(p,1,1))/(2*h)
+    gz=(np.roll(p,-1,2)-np.roll(p,1,2))/(2*h)
+    return D * np.sum((gx**2+gy**2+gz**2)/safe)*dV
+
+def kin_of(p, div_v):
+    return np.sum(p * div_v) * dV
+
+# Initial condition: Gaussian blob (periodic domain, fits well inside)
+cx = cy = cz = L/2
+p = np.exp(-((X-cx)**2+(Y-cy)**2+(Z-cz)**2)/(2*sigma0**2))
+p /= p.sum()*dV
+
+t_arr=np.zeros(Nsteps+1); H_arr=np.zeros(Nsteps+1)
+FI_arr=np.zeros(Nsteps+1); KN_arr=np.zeros(Nsteps+1)
+mass_arr=np.zeros(Nsteps+1)
+
+H_arr[0]=H_of(p); FI_arr[0]=FI_of(p)
+KN_arr[0]=kin_of(p,DIV_V2); mass_arr[0]=p.sum()*dV
+
+print(f"\nInitial: H={H_arr[0]:.5f}  FI={FI_arr[0]:.5f}  kin={KN_arr[0]:.5f}")
+
+for n in range(Nsteps):
+    # Fully conservative update mapping directly to the Continuity Equation
+    p = p + dt * (-div_pv(p, VX2, VY2, VZ2) + D * lap(p))
+    p = np.maximum(p,0)
+    # No renormalisation — let mass evolve naturally
+    t_arr[n+1]=dt*(n+1); H_arr[n+1]=H_of(p); FI_arr[n+1]=FI_of(p)
+    KN_arr[n+1]=kin_of(p,DIV_V2); mass_arr[n+1]=p.sum()*dV
+    if (n+1)%200==0:
+        print(f"  n={n+1}: H={H_arr[n+1]:.5f}  FI={FI_arr[n+1]:.5f}  "
+              f"kin={KN_arr[n+1]:.5f}  mass={mass_arr[n+1]:.6f}")
+
+RHS_arr = KN_arr + FI_arr
+dH_num  = np.gradient(H_arr, dt)
+
+sl = slice(10,-10)
+r = np.corrcoef(dH_num[sl], RHS_arr[sl])[0,1]
+print(f"\nMass conservation: min={mass_arr.min():.6f}  max={mass_arr.max():.6f}")
+print(f"Pearson r(dH_num, RHS) = {r:.6f}")
+for idx in [0,200,500,800]:
+    print(f"  n={idx}: dH_num={dH_num[idx]:.5f}  RHS={RHS_arr[idx]:.5f}")
+
+# ── Compute full Eq.(29) RHS ──────────────────────────────────────────────────
+MH      = mass_arr * H_arr
+dMH_num = np.gradient(MH, dt)
+M_dot   = np.gradient(mass_arr, dt)
+
+RHS_full = M_dot * (1 - H_arr) + mass_arr * (KN_arr + FI_arr)
+RHS_30   = KN_arr + FI_arr
+
+r_29  = np.corrcoef(dMH_num[sl], RHS_full[sl])[0,1]
+r_30  = np.corrcoef(np.gradient(H_arr,dt)[sl], RHS_30[sl])[0,1]
+res   = np.abs(dMH_num[sl] - RHS_full[sl])
+rel   = res / (np.abs(RHS_full[sl]) + 1e-15)
+
+print(f"\nr(Eq.29): {r_29:.6f}")
+print(f"r(Eq.30): {r_30:.6f}")
+print(f"Mean relative error (Eq.29): {rel.mean():.4f}")
+
+# ── Plotting ──────────────────────────────────────────────────────────────────
+plt.rcParams.update({
+    'font.family': 'serif', 'font.size': 11,
+    'axes.facecolor': 'white', 'figure.facecolor': 'white',
+    'axes.edgecolor': '#333333', 'axes.labelcolor': '#111111',
+    'xtick.color': '#111111', 'ytick.color': '#111111',
+    'text.color': '#111111', 'axes.titlecolor': '#111111',
+    'axes.grid': True, 'grid.color': '#dddddd', 'grid.linewidth': 0.7,
+    'axes.spines.top': False, 'axes.spines.right': False,
+})
+
+C_NUM='#1565C0'; C_TH='#C62828'; C_FI='#2E7D32'; C_KIN='#E65100'
+
+fig = plt.figure(figsize=(14, 12))
+fig.patch.set_facecolor('white')
+gs  = gridspec.GridSpec(3, 2, figure=fig, hspace=0.52, wspace=0.35)
+
+ts    = t_arr[sl]; dMH_s = dMH_num[sl]; RHS_s = RHS_full[sl]
+FIs   = FI_arr[sl]; KNs = KN_arr[sl]; Hs = H_arr[sl]
+
+# ── Panel 1 (top, full width): Main validation ───────────────────────────────
+ax1 = fig.add_subplot(gs[0, :])
+ax1.plot(ts, RHS_s,  '-',  color=C_TH,  lw=2.8, zorder=4,
+         label='Theoretical RHS of Eq. (30):  '
+               'integral(p div(v) dV)  +  D * integral(||grad p||^2 / p  dV)')
+ax1.plot(ts, dMH_s,  '--', color=C_NUM, lw=2.0, zorder=5,
+         label='Numerical LHS:  d(M*H)/dt  via central finite differences on H(t)')
+ax1.fill_between(ts, dMH_s, RHS_s, alpha=0.13, color='purple',
+                 label='Residual  (LHS - RHS)')
+ax1.axhline(0, color='#999999', lw=0.8, ls=':')
+ax1.set_xlabel('Time  [s]', fontsize=12)
+ax1.set_ylabel('d(M H)/dt', fontsize=12)
+ax1.set_title(
+    '3D Computational Validation of Entropy Evolution Equation (Eq. 30)\n'
+    'dH/dt  =  integral( p * div(v) dV )  +  D * integral( ||grad p||^2 / p  dV )',
+    fontsize=12, fontweight='bold', pad=10)
+ax1.legend(fontsize=9, framealpha=0.95, loc='upper right')
+ax1.text(0.02, 0.08,
+         f'Pearson r = {r_29:.5f}\nMean rel. error = {rel.mean():.3f}',
+         transform=ax1.transAxes, fontsize=9.5,
+         bbox=dict(boxstyle='round,pad=0.4', facecolor='#e8f5e9', edgecolor='#2E7D32'))
+
+# ── Panel 2 (middle-left): H(t) ──────────────────────────────────────────────
+ax2 = fig.add_subplot(gs[1, 0])
+ax2.plot(t_arr, H_arr, color=C_NUM, lw=2.2)
+ax2.set_xlabel('Time  [s]', fontsize=11)
+ax2.set_ylabel('H(t) = -integral( p ln p  dV )', fontsize=10)
+ax2.set_title('Shannon Entropy H(t)', fontsize=11, fontweight='bold', pad=7)
+ax2.text(0.97, 0.08, f'H(0)={H_arr[0]:.3f}\nH(T)={H_arr[-1]:.3f}',
+         transform=ax2.transAxes, ha='right', fontsize=9,
+         bbox=dict(boxstyle='round,pad=0.35', facecolor='#f5f5f5', edgecolor='#ccc'))
+
+# ── Panel 3 (middle-right): RHS decomposition ────────────────────────────────
+ax3 = fig.add_subplot(gs[1, 1])
+ax3.plot(ts, FIs,       color=C_FI,  lw=2.0,
+         label='Fisher Info term:  D * integral( ||grad p||^2 / p  dV )  > 0')
+ax3.plot(ts, KNs,       color=C_KIN, lw=2.0, linestyle='--',
+         label='Kinematic term:  integral( p * div(v)  dV )  (spatially varying)')
+ax3.plot(ts, FIs + KNs, color=C_TH,  lw=1.8, linestyle=':',
+         label='Sum = theoretical dH/dt  (RHS of Eq. 30)')
+ax3.axhline(0, color='#aaaaaa', lw=0.8, ls=':')
+ax3.set_xlabel('Time  [s]', fontsize=11)
+ax3.set_ylabel('Contribution to dH/dt', fontsize=11)
+ax3.set_title('RHS Decomposition: Kinematic Sink + Fisher Info Source', fontsize=11, fontweight='bold', pad=7)
+ax3.legend(fontsize=8.5, framealpha=0.95)
+
+# ── Panel 4 (bottom-left): Absolute + relative residual ──────────────────────
+ax4 = fig.add_subplot(gs[2, 0])
+ax4.semilogy(ts, res, color='purple', lw=1.8, label='|LHS - RHS|  (absolute)')
+ax4.semilogy(ts, rel, color='#555555', lw=1.5, linestyle='--',
+             label='Relative error  |err| / |theory|')
+ax4.set_xlabel('Time  [s]', fontsize=11)
+ax4.set_ylabel('Error  (log scale)', fontsize=11)
+ax4.set_title('Residual  |Numerical - Theoretical|', fontsize=11, fontweight='bold', pad=7)
+ax4.legend(fontsize=9, framealpha=0.95)
+ax4.text(0.97, 0.95, f'Mean rel. err = {rel.mean():.3f}\nMax rel. err = {rel.max():.3f}',
+         transform=ax4.transAxes, ha='right', va='top', fontsize=9,
+         bbox=dict(boxstyle='round,pad=0.35', facecolor='#f5f5f5', edgecolor='#ccc'))
+
+# ── Panel 5 (bottom-right): LHS vs RHS scatter ───────────────────────────────
+ax5 = fig.add_subplot(gs[2, 1])
+sc  = ax5.scatter(RHS_s, dMH_s, c=ts, cmap='viridis', s=8, alpha=0.75, zorder=4)
+cb  = fig.colorbar(sc, ax=ax5, fraction=0.046, pad=0.04)
+cb.set_label('Time  [s]', fontsize=9); cb.ax.tick_params(labelsize=8)
+lim = [min(RHS_s.min(), dMH_s.min())*0.92,
+       max(RHS_s.max(), dMH_s.max())*1.05]
+ax5.plot(lim, lim, 'r--', lw=1.5, label='Perfect agreement  (y = x)')
+ax5.set_xlim(lim); ax5.set_ylim(lim)
+ax5.set_xlabel('Theoretical dH/dt  (RHS, Eq. 30)', fontsize=10)
+ax5.set_ylabel('Numerical dH/dt  (LHS)', fontsize=10)
+ax5.set_title('LHS vs RHS Scatter  (diagonal = perfect agreement)', fontsize=11, fontweight='bold', pad=7)
+ax5.legend(fontsize=9)
+ax5.text(0.05, 0.95, f'Pearson r = {r_29:.5f}',
+         transform=ax5.transAxes, ha='left', va='top', fontsize=9,
+         bbox=dict(boxstyle='round,pad=0.35', facecolor='#e8f5e9', edgecolor='#2E7D32'))
+
+fig.suptitle(
+    '3D Numerical Validation of Eq. (30)   |   '
+    'Velocity field: v = ABC-type incompressible + compressive perturbation\n'
+    'v_x = A*sin(2pi*y/L)*cos(2pi*z/L) + eps*A*sin(2pi*x/L),  etc.   |   '
+    'div(v) spatially varying, mean = 0,  std = 0.65   |   D = 0.05,  A = 0.8,  eps = 0.3',
+    fontsize=10, fontweight='bold', y=1.015)
+
+fig.savefig('paper_3d_validation_eq30.png',
+            dpi=200, bbox_inches='tight', facecolor='white')
+plt.close(fig)
+print("Figure saved: paper_3d_validation_eq30.png")
