@@ -1,0 +1,20 @@
+div(v) field: mean=-0.00000  std=0.65110  min=-1.5004  max=1.5004
+CFL: dt_max=0.02613  diff: dt_max=0.00926  dt=0.001
+
+Initial: H=1.50792  FI=0.93776  kin=0.00000
+  n=200: H=1.68228  FI=0.87136  kin=-0.04975  mass=1.000000
+  n=400: H=1.83946  FI=0.86103  kin=-0.10641  mass=1.000000
+  n=600: H=1.98509  FI=0.86972  kin=-0.16892  mass=1.000000
+  n=800: H=2.12003  FI=0.88100  kin=-0.23521  mass=1.000000
+
+Mass conservation: min=1.000000  max=1.000000
+Pearson r(dH_num, RHS) = 0.999998
+  n=0: dH_num=0.93540  RHS=0.93776
+  n=200: dH_num=0.82099  RHS=0.82161
+  n=500: dH_num=0.72801  RHS=0.72728
+  n=800: dH_num=0.64703  RHS=0.64579
+
+r(Eq.29): 0.999998
+r(Eq.30): 0.999998
+Mean relative error (Eq.29): 0.0011
+Figure saved: paper_3d_validation_eq30.png
