@@ -47,8 +47,6 @@ int main() {
     cout << "Initialization complete! Total probability = 1.0" << endl;
     cout << "Alpha (Stability) = " << alpha << endl;
 
-    // TODO: The Main Time-Stepping Loop goes here
-
     // Open a CSV file to save our data
     ofstream outFile("entropy_data.csv");
     outFile << "Time,Entropy,Fisher_RHS" << endl;
@@ -81,7 +79,7 @@ int main() {
             }
         }
 
-        // Save data to the file every 10 steps so we don't bloat the CSV
+        // Save data to the file every 10 steps 
         if (n % 10 == 0) {
             double current_time = n * dt;
             outFile << current_time << "," << H << "," << Fisher_RHS << endl;
